@@ -1,0 +1,58 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel SimplexNoise
+#include "SNoise_2D.compute"
+
+int numThreads;
+
+// Inputs
+const int samplesPerAxis;
+const float steepness;
+const int octaves;
+const float persistance;
+const float frequency;
+
+// Output density map
+RWStructuredBuffer<float> densities;
+
+int convertIDToIndex(uint3 id) {
+    return (id.z * samplesPerAxis * samplesPerAxis) + (id.y * samplesPerAxis) + id.x;
+}
+
+[numthreads(8, 8, 8)]
+void SimplexNoise(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= samplesPerAxis || id.y >= samplesPerAxis || id.z >= samplesPerAxis) {
+        return;
+    }
+
+    // Calculate the density from 2d noise for this xz position
+    float xzDensity = 0;
+
+    float a = frequency;
+    float b = 1;
+    float max = 1;
+
+    for (int i = 0; i < octaves; i++) {
+        float n = snoise2D(float2(id.x + 100 * i, id.z + 100 * i) * a);
+        n = (n + 1) / 2;
+
+        xzDensity += n * b;
+
+        // Update the max value
+        max += b;
+
+        // Update the nosie settings
+        a *= 2;
+        b *= persistance;
+    }
+
+    // Normalize the value
+    xzDensity /= max;
+    xzDensity *= steepness;
+    
+    // Convert the 2d density into a 3d density
+    float density = id.y / xzDensity;
+
+    // Add the point to the density map
+    densities[convertIDToIndex(id)] = density;
+}

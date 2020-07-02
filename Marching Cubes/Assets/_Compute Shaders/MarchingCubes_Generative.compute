@@ -1,0 +1,93 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel Marcher_GE
+#include "MarchTables.compute"
+#include "SNoise_3D.compute"
+
+static const int numThreads = 8;
+
+struct Tri {
+    float3 vertexA;
+    float3 vertexB;
+    float3 vertexC;
+};
+
+// Input variables
+int offset;
+int pointsPerAxis;
+float pointRes;
+float surfaceLevel;
+float frequency;
+bool smoothMesh;
+
+// Output variables
+AppendStructuredBuffer<Tri> triangles;
+
+float4 getPointValue(float3 p) {
+    // Get the position's noise value and return it along with the point's noise value
+    float3 a = p - (pointsPerAxis / 2);
+    float w = snoise3D((a * frequency) + offset);
+
+    return float4(p.x, p.y, p.z, w);
+}
+
+float3 interpolateVerts(float4 a, float4 b) {
+    if (smoothMesh) {
+        float t = (surfaceLevel - a.w) / (b.w - a.w);
+        return a.xyz + t * (b.xyz - a.xyz);
+    }
+    else {
+        return ((a.xyz + b.xyz) / 2);
+    }
+}
+
+[numthreads(numThreads, numThreads, numThreads)]
+void Marcher_GE(int3 id : SV_DispatchThreadID)
+{
+    // Halt before the edge of the shape because calculations include neighbors (+1)
+    if (id.x >= pointsPerAxis - 1 || id.y >= pointsPerAxis - 1 || id.z >= pointsPerAxis - 1) {
+        return;
+    }
+
+    // Get the cube's corners
+    float4 cubeCorners[8] = {
+        getPointValue(float3(id.x    , id.y    , id.z)),
+        getPointValue(float3(id.x + 1, id.y    , id.z)),
+        getPointValue(float3(id.x + 1, id.y    , id.z + 1)),
+        getPointValue(float3(id.x    , id.y    , id.z + 1)),
+        getPointValue(float3(id.x    , id.y + 1, id.z)),
+        getPointValue(float3(id.x + 1, id.y + 1, id.z)),
+        getPointValue(float3(id.x + 1, id.y + 1, id.z + 1)),
+        getPointValue(float3(id.x    , id.y + 1, id.z + 1))
+    };
+
+    // Calculate the cube's id
+    int cubeID = 0;
+    if (cubeCorners[0].w < surfaceLevel) cubeID |= 1;
+    if (cubeCorners[1].w < surfaceLevel) cubeID |= 2;
+    if (cubeCorners[2].w < surfaceLevel) cubeID |= 4;
+    if (cubeCorners[3].w < surfaceLevel) cubeID |= 8;
+    if (cubeCorners[4].w < surfaceLevel) cubeID |= 16;
+    if (cubeCorners[5].w < surfaceLevel) cubeID |= 32;
+    if (cubeCorners[6].w < surfaceLevel) cubeID |= 64;
+    if (cubeCorners[7].w < surfaceLevel) cubeID |= 128;
+
+    // Create triangles for all the surfaces (each id links to a item in the triangulation table
+    for (int i = 0; triangulation[cubeID][i] != -1; i += 3) {
+        // Get indices of corner points A and B for each of the three edges
+        // of the cube that need to be joined to form the triangle.
+        int a0 = cornerIndexAFromEdge[triangulation[cubeID][i]];
+        int b0 = cornerIndexBFromEdge[triangulation[cubeID][i]];
+
+        int a1 = cornerIndexAFromEdge[triangulation[cubeID][i + 1]];
+        int b1 = cornerIndexBFromEdge[triangulation[cubeID][i + 1]];
+
+        int a2 = cornerIndexAFromEdge[triangulation[cubeID][i + 2]];
+        int b2 = cornerIndexBFromEdge[triangulation[cubeID][i + 2]];
+
+        Tri t;
+        t.vertexA = interpolateVerts(cubeCorners[a0], cubeCorners[b0]) * pointRes;
+        t.vertexB = interpolateVerts(cubeCorners[a1], cubeCorners[b1]) * pointRes;
+        t.vertexC = interpolateVerts(cubeCorners[a2], cubeCorners[b2]) * pointRes;
+        triangles.Append(t);
+    }
+}

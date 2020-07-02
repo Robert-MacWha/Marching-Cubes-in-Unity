@@ -1,0 +1,93 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+
+// Currently Under Construction
+#pragma kernel HydraulicErosion
+
+int dropCount;
+
+float dropStartSize;
+float evaporationRate;
+float groundHardness;
+
+RWStructuredBuffer<int3> positions;
+RWStructuredBuffer<float> densityMap;
+
+struct Drop {
+    int3 position;
+    float size;
+    float content;
+};
+
+int convertIDToIndex(int3 id) {
+    return id.x;
+}
+
+void RemoveMaterial(int3 position, float amount) {
+    densityMap[convertIDToIndex(position)] -= amount;
+}
+
+void AddMaterial(int3 position, float amount) {
+    densityMap[convertIDToIndex(position)] += amount;
+}
+
+int3 FindNextPosition(int3 current) {
+    float minDensity;
+    int3 minDensityPosition;
+
+    for (int x = -1; x < 1; x++) {
+        for (int z = -1; z < 1; z++) {
+            if (x == current.x && z == current.z) { continue; }
+            
+            int3 testPos = int3(x + current.x, current.y, z + current.z);
+
+            if (densityMap[convertIDToIndex(testPos)] < minDensity) {
+                minDensity = densityMap[convertIDToIndex(testPos)];
+                minDensityPosition = testPos;
+            }
+        }
+    }
+
+    if (minDensity < 1) {
+        minDensityPosition.y -= 1;
+    }
+
+    return minDensityPosition;
+}
+
+[numthreads(64, 1, 1)]
+void HydraulicErosion (uint3 id : SV_DispatchThreadID)
+{
+    if (convertIDToIndex(id) > dropCount) {
+        return;
+    }
+    // Select a random vertex for the drop to start at
+    Drop d;
+    d.position = int3(positions[convertIDToIndex(id)]);
+    densityMap[0] = 100;
+    return;
+
+    // While the drop is not dead
+    while (d.size >= 0) {
+        // Evaporate part of the drop, making it's carying capacity smaller
+        d.size -= evaporationRate;
+
+        // See if it can pick up any material
+        if (d.size > d.content) {
+            // Remove the material from the ground at the drop's position and give it to the drop
+            float amountToRemove = d.size - d.content <= groundHardness ? d.size - d.content : groundHardness;
+
+            RemoveMaterial(d.position, amountToRemove);
+            d.content += amountToRemove;
+        }
+        else {
+            // Deposit some material from the drop onto the ground
+            float amountToDeposit = d.content - d.size;
+
+            AddMaterial(d.position, amountToDeposit);
+            d.content -= amountToDeposit;
+        }
+
+        // Find the next vertice and move to that location
+        d.position = FindNextPosition(d.position);
+    }
+}
